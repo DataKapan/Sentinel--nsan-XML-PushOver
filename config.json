@@ -1,0 +1,43 @@
+{
+    "DEVICE_ID": "Orhan Ev",
+    "FTP": {
+        "SERVER": "81.214.129.27",
+        "USERNAME": "econow",
+        "PASSWORD": "econow123"
+    },
+    "SENSOR": {
+        "PORT": "/dev/ttyAMA0",
+        "BAUDRATE": 115200,
+        "PRESENCE_GPIO_PIN": 26
+    },
+    "PUSHOVER": {
+        "APP_TOKEN": "ahh2xnd5zj3opnwqj9w1pmv156y1ro",
+        "GROUP_KEY": "gi22has3amknnbi2cbisca86d1nfsz"
+    },
+    "EMAIL": {
+        "SMTP_SERVER": "smtp.gmail.com",
+        "SMTP_PORT": 587,
+        "SENDER_EMAIL": "orhan@datakapan.com",
+        "SENDER_PASSWORD": "krukrxxdcjztkqsi",
+        "RECIPIENT_EMAILS": [
+            "lkaramanoglu@yahoo.com"
+        ]
+    },
+    "MILESTONE": {
+        "ENABLED": false,
+        "IP": "78.188.174.123",
+        "PORT": 11234,
+        "ZONE_NAME": "BOLGE_A_GIRIS"
+    },
+    "SYSTEM": {
+        "MODEL_PATH_RELATIVE": "model/detect.tflite",
+        "PHOTO_DIR_RELATIVE": "photos",
+        "TEMP_DIR_RELATIVE": "temp",
+        "LOG_FILE_RELATIVE": "logs/sentinel.log",
+        "DETECTION_THRESHOLD": 0.65,
+        "INTERNET_CHECK_INTERVAL_SECONDS": 300,
+        "FTP_RETRY_INTERVAL_SECONDS": 300,
+        "CASE_COOLDOWN_SECONDS": 1,
+        "SENSOR_CALIBRATION_SECONDS": 30
+    }
+}
