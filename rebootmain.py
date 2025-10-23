@@ -248,7 +248,7 @@ class FTPQueueManager:
                 try: ftp.cwd(part)
                 except Exception:
                     try: ftp.mkd(part); ftp.cwd(part)
-                    except Exception as e_mkd: log_and_print(f"FTP klasörü oluşturulamadı {part}: {e_mkd}", logging.ERROR); raise e_mkd
+                    except Exception as e_mkd: raise e_mkd # Hata dışarı aktarılmalı
         finally:
              try: ftp.cwd(original_path) # Her zaman orijinal yola dönmeye çalış
              except Exception: log_and_print("FTP: Orijinal yola dönülemedi.", logging.WARNING)
@@ -305,10 +305,10 @@ class PushoverClient:
         self.token = config.get('APP_TOKEN')
         self.target_key = config.get('GROUP_KEY') # Sadece Group Key'i alıyoruz
         self.api_url = "https://api.pushover.net/1/messages.json"
-        
-        self.enabled = bool(self.token and self.target_key) # Artık sadece token ve target_key yeterli
+
+        self.enabled = bool(self.token and self.target_key)
         self.client = httpx.AsyncClient(timeout=30.0) if self.enabled else None
-        
+
         if not self.enabled:
              log_and_print("Pushover ayarları eksik/hatalı (APP_TOKEN veya GROUP_KEY), Pushover devre dışı.", logging.WARNING)
 
@@ -340,16 +340,19 @@ class PushoverClient:
         try:
             response = await self.client.post(self.api_url, data=payload) # JSON yerine form data
             if response.status_code != 200:
+                # Pushover 4xx hatalarını logla ama programı durdurma
                 log_and_print(f"Pushover mesaj gönderilemedi (Hedef: {self.target_key[:5]}...): HTTP {response.status_code} - {response.text}", logging.WARNING)
         except httpx.RequestError as e: log_and_print(f"Pushover mesaj gönderme isteği hatası: {e}", logging.ERROR)
-        except Exception as e: log_and_print(f"Pushover mesaj gönderme sırasında hata: {e}", logging.ERROR)
+        except Exception as e: log_and_print(f"Pushover mesaj gönderme sırasında beklenmedik hata: {e}", logging.ERROR)
 
     async def send_photo(self, photo_path, message="İnsan Tespiti", title="Sentinel Uyarısı"):
         if not self.enabled: return
         try:
-            # Dosyayı asenkron olarak oku (büyük dosyalar için daha iyi olabilir)
-            async with asyncio.to_thread(open, photo_path, 'rb') as pf:
-                photo_bytes = await pf.read()
+            # --- DOSYA OKUMA DÜZELTİLDİ ---
+            # Dosyayı okuyup içeriğini al (blocking ama basit)
+            with open(photo_path, 'rb') as pf:
+                photo_bytes = pf.read()
+            # --- DÜZELTME SONU ---
 
             files = {'attachment': (os.path.basename(photo_path), photo_bytes, 'image/jpeg')}
             payload = {
@@ -366,7 +369,7 @@ class PushoverClient:
 
         except FileNotFoundError: log_and_print(f"Pushover fotoğraf dosyası bulunamadı: {photo_path}", logging.ERROR)
         except httpx.RequestError as e: log_and_print(f"Pushover fotoğraf gönderme isteği hatası: {e}", logging.ERROR)
-        except Exception as e: log_and_print(f"Pushover fotoğraf gönderme sırasında hata: {e}", logging.ERROR)
+        except Exception as e: log_and_print(f"Pushover fotoğraf gönderme sırasında beklenmedik hata: {e}", logging.ERROR)
 
 # ==============================================================================
 # MilestoneClient Sınıfı
@@ -380,11 +383,11 @@ class MilestoneClient:
     async def trigger_event(self, device_id):
         if not self.enabled: return False
         msg = f"İnsan Tespiti - Cihaz: {device_id}"; xml = f"<event><source>DatakapanSistemi</source><externalid>Bolge_Tetigi</externalid><message>{msg}</message><key>{self.zone_name}</key></event>"
-        payload = xml.encode('utf-8') + b'\r\n'; log_and_print(f"Milestone -> {self.zone_name}")
+        payload = xml.encode('utf-8') + b'\r\n'; log_and_print(f"Milestone -> {self.zone_name}", logging.DEBUG) # Log seviyesi DEBUG'a düşürüldü
         writer = None
         try:
             reader, writer = await asyncio.wait_for(asyncio.open_connection(self.ip, self.port), timeout=3.0)
-            writer.write(payload); await writer.drain(); log_and_print(f"✅ Milestone '{self.zone_name}' tetiklemesi gönderildi.")
+            writer.write(payload); await writer.drain(); log_and_print(f"✅ Milestone '{self.zone_name}' tetiklemesi gönderildi.", logging.INFO)
             return True
         except asyncio.TimeoutError: log_and_print(f"❌ HATA: Milestone bağlantısı zaman aşımına uğradı.", logging.ERROR); return False
         except ConnectionRefusedError: log_and_print(f"❌ HATA: Milestone bağlantısı reddedildi ({self.ip}:{self.port}).", logging.ERROR); return False
@@ -424,36 +427,36 @@ class SentinelSystem:
 
     async def periodic_internet_check(self):
         interval = self.system_config.get('INTERNET_CHECK_INTERVAL_SECONDS', 300)
-        reboot_threshold = 2 # Kaç kontrol periyodu offline kalınca reboot edilecek (örn 2 * 5dk = 10dk)
+        reboot_threshold = 2
         log_and_print(f"Periyodik internet kontrolü başlatıldı (Her {interval} saniyede bir). Offline kalınırsa {reboot_threshold * interval / 60:.0f}dk sonra reboot.")
         await asyncio.sleep(15)
         while True:
             is_currently_online = await self.check_internet_connection()
             if is_currently_online:
-                self.offline_reboot_counter = 0 # Online ise sayacı sıfırla
-                if not self.is_online: # Yeni çevrimiçi oldu
+                self.offline_reboot_counter = 0
+                if not self.is_online:
                     self.is_online = True; log_and_print("İNTERNET BAĞLANTISI GERİ GELDİ.", logging.INFO)
                     status_update_msg = f"🟢 Cihaz Tekrar Çevrimiçi: {self.device_id}"
                     await self.pushover.send_message(status_update_msg, title="Sentinel Bağlantı Durumu")
                     await self.process_pending_notifications()
-            else: # Şu anda çevrimdışı
+            else:
                 self.offline_reboot_counter += 1
-                if self.is_online: # Yeni çevrimdışı oldu
+                if self.is_online:
                     self.is_online = False; log_and_print("İNTERNET BAĞLANTISI KESİLDİ.", logging.WARNING)
                     status_update_msg = f"🔴 Cihaz Çevrimdışı Oldu: {self.device_id}"
                     asyncio.create_task(self.pushover.send_message(status_update_msg, title="Sentinel Bağlantı Durumu"))
-                else: # Zaten çevrimdışıydı
+                else:
                      log_and_print(f"İnternet hala yok (Sayaç: {self.offline_reboot_counter}/{reboot_threshold}).", logging.WARNING)
                      if self.offline_reboot_counter >= reboot_threshold:
                          log_and_print(f"İnternet {reboot_threshold * interval / 60:.0f} dakikadır yok. Cihaz yeniden başlatılıyor...", logging.CRITICAL)
                          reboot_msg = f"⚠️ Cihaz ({self.device_id}) internet yokluğu nedeniyle yeniden başlatılıyor..."
-                         # Bildirimi göndermeyi dene ama bekleme
                          asyncio.create_task(self.pushover.send_message(reboot_msg, title="Sentinel Yeniden Başlatma", priority=1))
-                         await asyncio.sleep(5) # Bildirimin gitme şansı
+                         await asyncio.sleep(5)
                          log_and_print("Yeniden başlatma komutu: sudo reboot", logging.CRITICAL)
-                         os.system('sudo reboot')
-                         await asyncio.sleep(60) # Reboot işlemi başlayana kadar bekle (bu satıra ulaşmaması lazım)
-
+                         # Güvenli kapatma için systemd kullanmayı dene
+                         try: os.system('sudo systemctl reboot')
+                         except Exception: os.system('sudo reboot') # Fallback
+                         await asyncio.sleep(60)
             await asyncio.sleep(interval)
 
     async def process_pending_notifications(self):
@@ -509,7 +512,7 @@ class SentinelSystem:
         current_case_copy = self.current_case.copy()
         if os.path.isdir(current_case_copy['dir']): self.ftp_manager.queue_case(current_case_copy['dir'])
         else: log_and_print(f"FTP'ye eklenemedi: Vaka dizini bulunamadı {current_case_copy['dir']}", logging.ERROR)
-        self.current_case = None # Vakayı kapat
+        self.current_case = None
         if photo_with_human:
             if self.is_online:
                 log_and_print(f"Online: Vaka {case_id} bildirimleri gönderiliyor...")
@@ -564,7 +567,7 @@ class SentinelSystem:
                 else: await asyncio.sleep(0.1)
             except Exception as e:
                 log_and_print(f"Ana döngüde kritik hata: {e}\n{traceback.format_exc()}", level=logging.CRITICAL)
-                if self.current_case: await self.discard_case() # Hata durumunda açık vakayı iptal et
+                if self.current_case: await self.discard_case()
                 self.motion_being_processed = False
                 await asyncio.sleep(10)
 
@@ -574,8 +577,7 @@ class SentinelSystem:
 if __name__ == "__main__":
     CONFIG = {}
     config_path = os.path.join(APP_DIR, 'config.json')
-    # Logging'i config okumadan önce default path ile başlat
-    setup_logging(LOG_FILE_PATH)
+    setup_logging(LOG_FILE_PATH) # Default log path ile başla
     try:
         with open(config_path, 'r', encoding='utf-8') as f: CONFIG = json.load(f)
         log_path_relative = CONFIG.get('SYSTEM', {}).get('LOG_FILE_RELATIVE', 'logs/sentinel.log')
@@ -607,7 +609,7 @@ if __name__ == "__main__":
              if tasks:
                  for task in tasks: task.cancel()
                  # İptallerin biraz işlemesi için bekle
-                 # main_loop.run_until_complete(asyncio.sleep(1.0)) # Bu kapanışta hata verebilir
+                 # main_loop.run_until_complete(asyncio.sleep(1.0)) # Kapanışta hata verebilir
              if hasattr(sentinel, 'sensor') and sentinel.sensor: sentinel.sensor.cleanup()
              try: GPIO.cleanup(); log_and_print("GPIO başarıyla temizlendi.")
              except RuntimeError as e: # GPIO zaten temizlenmişse
